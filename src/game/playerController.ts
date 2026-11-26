@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { ARENA_RADIUS, MAX_CHAIN_REACH, WEAPON_COMBAT_HEIGHT } from './constants';
 import { FighterCommandTarget } from './fighterInterface';
+import { GamepadManager } from './gamepad';
 
 const _raycaster = new THREE.Raycaster();
 const _ndc = new THREE.Vector2();
@@ -8,25 +9,83 @@ const _combatPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -WEAPON_COMBAT_
 const _hitPoint = new THREE.Vector3();
 const _dodgeDir = new THREE.Vector3();
 
+function createCursorReticle(ringColor: number, orbColor: number): THREE.Group {
+  const group = new THREE.Group();
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.28, 0.42, 24),
+    new THREE.MeshBasicMaterial({
+      color: ringColor,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+    })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = -WEAPON_COMBAT_HEIGHT + 0.05;
+  group.add(ring);
+
+  const orb = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.16, 0),
+    new THREE.MeshBasicMaterial({
+      color: orbColor,
+      transparent: true,
+      opacity: 0.95,
+    })
+  );
+  group.add(orb);
+  group.visible = false;
+  return group;
+}
+
+function clampCursorToFighterReach(
+  cursorPos: THREE.Vector3,
+  fighterPos: THREE.Vector3
+): void {
+  const dx = cursorPos.x - fighterPos.x;
+  const dz = cursorPos.z - fighterPos.z;
+  const reachDist = Math.hypot(dx, dz);
+  if (reachDist > MAX_CHAIN_REACH) {
+    cursorPos.x = fighterPos.x + (dx / reachDist) * MAX_CHAIN_REACH;
+    cursorPos.z = fighterPos.z + (dz / reachDist) * MAX_CHAIN_REACH;
+  }
+
+  const arenaDist = Math.hypot(cursorPos.x, cursorPos.z);
+  const maxArena = ARENA_RADIUS - 0.5;
+  if (arenaDist > maxArena) {
+    cursorPos.x *= maxArena / arenaDist;
+    cursorPos.z *= maxArena / arenaDist;
+  }
+  cursorPos.y = WEAPON_COMBAT_HEIGHT;
+}
+
 /**
- * Handles Player 1 (Mouse 3D trajectory drawing + Space/E defense)
- * and Player 2 (Keyboard 3D aiming cursor + Enter/M draw + ShiftRight/. defense)
- * on a single computer.
+ * Handles Player 1 (Mouse/Keyboard + optional Xbox/compatible Gamepad)
+ * and Player 2 (Keyboard 3D aiming cursor + Xbox/compatible Gamepad)
+ * simultaneously on a single computer.
  */
 export class PlayerInputController {
   private readonly canvas: HTMLCanvasElement;
   private readonly camera: THREE.Camera;
   private readonly p1: FighterCommandTarget;
   private readonly p2: FighterCommandTarget;
+  private readonly gamepadManager: GamepadManager;
+  private readonly onPauseToggle?: () => void;
+
   private isLocal2P = false;
   private isActive = false;
+  private allowGamepadPause = false;
 
-  // P1 mouse drawing state
+  // P1 drawing states (Mouse or Gamepad)
   private p1MouseDrawing = false;
+  private p1PadDrawing = false;
+  public readonly p1CursorPos = new THREE.Vector3(-2.3, WEAPON_COMBAT_HEIGHT, 0);
+  public readonly p1CursorMesh: THREE.Group;
 
-  // P2 keyboard 3D cursor state
-  public readonly p2CursorPos = new THREE.Vector3(4.5, WEAPON_COMBAT_HEIGHT, 0);
-  private p2Drawing = false;
+  // P2 drawing states (Keyboard or Gamepad)
+  public readonly p2CursorPos = new THREE.Vector3(2.3, WEAPON_COMBAT_HEIGHT, 0);
+  private p2KeyDrawing = false;
+  private p2PadDrawing = false;
   public readonly p2CursorMesh: THREE.Group;
 
   private readonly keys = new Set<string>();
@@ -35,59 +94,52 @@ export class PlayerInputController {
     canvas: HTMLCanvasElement,
     camera: THREE.Camera,
     p1: FighterCommandTarget,
-    p2: FighterCommandTarget
+    p2: FighterCommandTarget,
+    gamepadManager: GamepadManager,
+    onPauseToggle?: () => void
   ) {
     this.canvas = canvas;
     this.camera = camera;
     this.p1 = p1;
     this.p2 = p2;
+    this.gamepadManager = gamepadManager;
+    this.onPauseToggle = onPauseToggle;
 
-    // 3D reticle for Player 2 keyboard trajectory drawing
-    this.p2CursorMesh = new THREE.Group();
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.28, 0.42, 24),
-      new THREE.MeshBasicMaterial({
-        color: 0xf97316,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.9,
-        depthWrite: false,
-      })
-    );
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = -WEAPON_COMBAT_HEIGHT + 0.05;
-    this.p2CursorMesh.add(ring);
-
-    const orb = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.16, 0),
-      new THREE.MeshBasicMaterial({
-        color: 0xfef08a,
-        transparent: true,
-        opacity: 0.95,
-      })
-    );
-    this.p2CursorMesh.add(orb);
-    this.p2CursorMesh.visible = false;
+    this.p1CursorMesh = createCursorReticle(0x06b6d4, 0x67e8f9);
+    this.p2CursorMesh = createCursorReticle(0xf97316, 0xfef08a);
 
     this.bindEvents();
   }
 
-  public setMode(isLocal2P: boolean, isActive: boolean): void {
+  public setMode(isLocal2P: boolean, isActive: boolean, allowPause = false): void {
     this.isLocal2P = isLocal2P;
     this.isActive = isActive;
-    this.p2CursorMesh.visible = isLocal2P && isActive;
+    this.allowGamepadPause = allowPause;
+
     if (!isActive) {
       this.p1MouseDrawing = false;
-      this.p2Drawing = false;
+      this.p1PadDrawing = false;
+      this.p2KeyDrawing = false;
+      this.p2PadDrawing = false;
       this.keys.clear();
       this.p1.setGuardHeld(false);
       this.p2.setGuardHeld(false);
+      this.p1CursorMesh.visible = false;
+      this.p2CursorMesh.visible = false;
     }
   }
 
   public resetCursors(): void {
     this.p1MouseDrawing = false;
-    this.p2Drawing = false;
+    this.p1PadDrawing = false;
+    this.p2KeyDrawing = false;
+    this.p2PadDrawing = false;
+
+    this.p1CursorPos.set(
+      this.p1.position.x + 2.2,
+      WEAPON_COMBAT_HEIGHT,
+      this.p1.position.z
+    );
     this.p2CursorPos.set(
       this.p2.position.x - 2.2,
       WEAPON_COMBAT_HEIGHT,
@@ -108,6 +160,9 @@ export class PlayerInputController {
 
   private readonly onPointerDown = (e: PointerEvent) => {
     if (!this.isActive) return;
+
+    const resolved = this.gamepadManager.resolveInputs();
+    if (!resolved.p1UsesKeyboardMouse) return;
 
     if (e.button === 2) {
       if (this.p1MouseDrawing) {
@@ -162,42 +217,43 @@ export class PlayerInputController {
       e.preventDefault();
     }
 
+    const resolved = this.gamepadManager.resolveInputs();
     const firstPress = !this.keys.has(e.code);
     this.keys.add(e.code);
 
-    // Player 1 Dodge (E or Q)
-    if (firstPress && (e.code === 'KeyE' || e.code === 'KeyQ')) {
-      const dx = (this.keys.has('KeyD') ? 1 : 0) - (this.keys.has('KeyA') ? 1 : 0);
-      const dz = (this.keys.has('KeyS') ? 1 : 0) - (this.keys.has('KeyW') ? 1 : 0);
-      if (dx !== 0 || dz !== 0) {
-        _dodgeDir.set(dx, 0, dz).normalize();
-        this.p1.triggerDodge(_dodgeDir);
-      } else {
-        this.p1.triggerDodge();
+    if (resolved.p1UsesKeyboardMouse) {
+      // Player 1 Dodge (E or Q)
+      if (firstPress && (e.code === 'KeyE' || e.code === 'KeyQ')) {
+        const dx = (this.keys.has('KeyD') ? 1 : 0) - (this.keys.has('KeyA') ? 1 : 0);
+        const dz = (this.keys.has('KeyS') ? 1 : 0) - (this.keys.has('KeyW') ? 1 : 0);
+        if (dx !== 0 || dz !== 0) {
+          _dodgeDir.set(dx, 0, dz).normalize();
+          this.p1.triggerDodge(_dodgeDir);
+        } else {
+          this.p1.triggerDodge();
+        }
+      }
+
+      if (firstPress && e.code === 'Escape' && this.p1MouseDrawing) {
+        this.p1MouseDrawing = false;
+        this.p1.cancelDrawing();
       }
     }
 
-    if (firstPress && e.code === 'Escape' && this.p1MouseDrawing) {
-      this.p1MouseDrawing = false;
-      this.p1.cancelDrawing();
-    }
-
-    // Player 2 Controls in Local 2P Mode
-    if (this.isLocal2P) {
-      // Start P2 trajectory draw: Enter, KeyM, or Numpad0
+    // Player 2 Keyboard Controls in Local 2P Mode
+    if (this.isLocal2P && resolved.p2UsesKeyboard) {
       if (
         firstPress &&
         (e.code === 'Enter' || e.code === 'KeyM' || e.code === 'Numpad0')
       ) {
         if (this.p2.canStartDrawing()) {
           if (this.p2.beginDrawing(this.p2CursorPos)) {
-            this.p2Drawing = true;
+            this.p2KeyDrawing = true;
             this.p2.addDrawingPoint(this.p2CursorPos);
           }
         }
       }
 
-      // P2 Dodge: Period, KeyO, or NumpadDecimal
       if (
         firstPress &&
         (e.code === 'Period' || e.code === 'KeyO' || e.code === 'NumpadDecimal')
@@ -212,10 +268,10 @@ export class PlayerInputController {
 
     if (
       this.isLocal2P &&
-      this.p2Drawing &&
+      this.p2KeyDrawing &&
       (e.code === 'Enter' || e.code === 'KeyM' || e.code === 'Numpad0')
     ) {
-      this.p2Drawing = false;
+      this.p2KeyDrawing = false;
       if (this.isActive) {
         this.p2.addDrawingPoint(this.p2CursorPos);
         this.p2.commitDrawing();
@@ -225,59 +281,161 @@ export class PlayerInputController {
     }
   };
 
+  /**
+   * Polls gamepads even when paused so Menu/Start can unpause on consoles.
+   */
+  public pollPauseOnly(): void {
+    const frames = this.gamepadManager.pollFrames();
+    if (this.allowGamepadPause && (frames.p1.pauseJustPressed || frames.p2.pauseJustPressed)) {
+      this.onPauseToggle?.();
+    }
+  }
+
   public update(dt: number, time: number): void {
+    const frames = this.gamepadManager.pollFrames();
+    if (this.allowGamepadPause && (frames.p1.pauseJustPressed || frames.p2.pauseJustPressed)) {
+      this.onPauseToggle?.();
+      return;
+    }
+
     if (!this.isActive) return;
 
-    // P1 Guard hold
-    const p1Guard = this.keys.has('Space') || this.keys.has('ShiftLeft');
-    this.p1.setGuardHeld(p1Guard);
+    const settings = this.gamepadManager.getSettings();
+    const resolved = this.gamepadManager.resolveInputs();
 
-    // P2 Local Controls
+    // --- PLAYER 1 ---
+    const p1Pad = frames.p1;
+    const p1KeyGuard =
+      resolved.p1UsesKeyboardMouse &&
+      (this.keys.has('Space') || this.keys.has('ShiftLeft'));
+    this.p1.setGuardHeld(p1KeyGuard || p1Pad.guardHeld);
+
+    if (p1Pad.connected) {
+      const p1Speed = 14.0 * settings.p1Bindings.sensitivity;
+      if (p1Pad.aimX !== 0 || p1Pad.aimY !== 0) {
+        this.p1CursorPos.x += p1Pad.aimX * p1Speed * dt;
+        this.p1CursorPos.z += p1Pad.aimY * p1Speed * dt;
+      }
+      clampCursorToFighterReach(this.p1CursorPos, this.p1.position);
+
+      this.p1CursorMesh.visible = !this.p1MouseDrawing;
+      this.p1CursorMesh.position.copy(this.p1CursorPos);
+      this.p1CursorMesh.rotation.y = time * 2.5;
+
+      if (p1Pad.dodgeJustPressed) {
+        this.p1PadDrawing = false;
+        if (p1Pad.aimX !== 0 || p1Pad.aimY !== 0) {
+          _dodgeDir.set(p1Pad.aimX, 0, p1Pad.aimY).normalize();
+          this.p1.triggerDodge(_dodgeDir);
+        } else {
+          this.p1.triggerDodge();
+        }
+      }
+
+      if (p1Pad.cancelJustPressed && this.p1PadDrawing) {
+        this.p1PadDrawing = false;
+        this.p1.cancelDrawing();
+      }
+
+      if (p1Pad.drawJustPressed && !this.p1MouseDrawing && this.p1.canStartDrawing()) {
+        if (this.p1.beginDrawing(this.p1CursorPos)) {
+          this.p1PadDrawing = true;
+          this.p1.addDrawingPoint(this.p1CursorPos);
+        }
+      }
+
+      if (this.p1PadDrawing) {
+        if (p1Pad.drawHeld) {
+          this.p1.addDrawingPoint(this.p1CursorPos);
+        } else {
+          this.p1PadDrawing = false;
+          this.p1.addDrawingPoint(this.p1CursorPos);
+          this.p1.commitDrawing();
+        }
+      }
+    } else {
+      this.p1PadDrawing = false;
+      this.p1CursorMesh.visible = false;
+    }
+
+    // --- PLAYER 2 (Local 2-Player Mode) ---
     if (this.isLocal2P) {
-      const p2Guard =
-        this.keys.has('ShiftRight') || this.keys.has('Slash') || this.keys.has('KeyU');
-      this.p2.setGuardHeld(p2Guard);
+      const p2Pad = frames.p2;
+      const p2KeyGuard =
+        resolved.p2UsesKeyboard &&
+        (this.keys.has('ShiftRight') || this.keys.has('Slash') || this.keys.has('KeyU'));
+      this.p2.setGuardHeld(p2KeyGuard || p2Pad.guardHeld);
 
-      // Move P2 3D cursor via Arrow keys or IJKL
-      const moveX =
-        (this.keys.has('ArrowRight') || this.keys.has('KeyL') ? 1 : 0) -
-        (this.keys.has('ArrowLeft') || this.keys.has('KeyJ') ? 1 : 0);
-      const moveZ =
-        (this.keys.has('ArrowDown') || this.keys.has('KeyK') ? 1 : 0) -
-        (this.keys.has('ArrowUp') || this.keys.has('KeyI') ? 1 : 0);
+      // Keyboard cursor movement for P2
+      if (resolved.p2UsesKeyboard) {
+        const moveX =
+          (this.keys.has('ArrowRight') || this.keys.has('KeyL') ? 1 : 0) -
+          (this.keys.has('ArrowLeft') || this.keys.has('KeyJ') ? 1 : 0);
+        const moveZ =
+          (this.keys.has('ArrowDown') || this.keys.has('KeyK') ? 1 : 0) -
+          (this.keys.has('ArrowUp') || this.keys.has('KeyI') ? 1 : 0);
 
-      if (moveX !== 0 || moveZ !== 0) {
-        const len = Math.hypot(moveX, moveZ);
-        const speed = 13.5;
-        this.p2CursorPos.x += (moveX / len) * speed * dt;
-        this.p2CursorPos.z += (moveZ / len) * speed * dt;
+        if (moveX !== 0 || moveZ !== 0) {
+          const len = Math.hypot(moveX, moveZ);
+          const speed = 13.5;
+          this.p2CursorPos.x += (moveX / len) * speed * dt;
+          this.p2CursorPos.z += (moveZ / len) * speed * dt;
+        }
       }
 
-      // Clamp P2 cursor within chain reach of P2 and inside arena
-      const dx = this.p2CursorPos.x - this.p2.position.x;
-      const dz = this.p2CursorPos.z - this.p2.position.z;
-      const reachDist = Math.hypot(dx, dz);
-      if (reachDist > MAX_CHAIN_REACH) {
-        this.p2CursorPos.x = this.p2.position.x + (dx / reachDist) * MAX_CHAIN_REACH;
-        this.p2CursorPos.z = this.p2.position.z + (dz / reachDist) * MAX_CHAIN_REACH;
+      // Gamepad cursor movement & actions for P2
+      if (p2Pad.connected) {
+        const p2Speed = 14.0 * settings.p2Bindings.sensitivity;
+        if (p2Pad.aimX !== 0 || p2Pad.aimY !== 0) {
+          this.p2CursorPos.x += p2Pad.aimX * p2Speed * dt;
+          this.p2CursorPos.z += p2Pad.aimY * p2Speed * dt;
+        }
+
+        if (p2Pad.dodgeJustPressed) {
+          this.p2PadDrawing = false;
+          if (p2Pad.aimX !== 0 || p2Pad.aimY !== 0) {
+            _dodgeDir.set(p2Pad.aimX, 0, p2Pad.aimY).normalize();
+            this.p2.triggerDodge(_dodgeDir);
+          } else {
+            this.p2.triggerDodge();
+          }
+        }
+
+        if (p2Pad.cancelJustPressed && this.p2PadDrawing) {
+          this.p2PadDrawing = false;
+          this.p2.cancelDrawing();
+        }
+
+        if (p2Pad.drawJustPressed && !this.p2KeyDrawing && this.p2.canStartDrawing()) {
+          if (this.p2.beginDrawing(this.p2CursorPos)) {
+            this.p2PadDrawing = true;
+            this.p2.addDrawingPoint(this.p2CursorPos);
+          }
+        }
+
+        if (this.p2PadDrawing) {
+          if (p2Pad.drawHeld) {
+            this.p2.addDrawingPoint(this.p2CursorPos);
+          } else {
+            this.p2PadDrawing = false;
+            this.p2.addDrawingPoint(this.p2CursorPos);
+            this.p2.commitDrawing();
+          }
+        }
+      } else {
+        this.p2PadDrawing = false;
       }
 
-      const arenaDist = Math.hypot(this.p2CursorPos.x, this.p2CursorPos.z);
-      const maxArena = ARENA_RADIUS - 0.5;
-      if (arenaDist > maxArena) {
-        this.p2CursorPos.x *= maxArena / arenaDist;
-        this.p2CursorPos.z *= maxArena / arenaDist;
-      }
-
-      this.p2CursorPos.y = WEAPON_COMBAT_HEIGHT;
+      clampCursorToFighterReach(this.p2CursorPos, this.p2.position);
       this.p2CursorMesh.visible = true;
       this.p2CursorMesh.position.copy(this.p2CursorPos);
       this.p2CursorMesh.rotation.y = time * 2.5;
 
-      if (this.p2Drawing) {
+      if (this.p2KeyDrawing) {
         this.p2.addDrawingPoint(this.p2CursorPos);
       }
     } else {
+      this.p2PadDrawing = false;
       this.p2CursorMesh.visible = false;
     }
   }
@@ -299,12 +457,14 @@ export class PlayerInputController {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
 
-    this.p2CursorMesh.traverse((obj) => {
-      if ((obj as THREE.Mesh).isMesh) {
-        const m = obj as THREE.Mesh;
-        m.geometry.dispose();
-        (m.material as THREE.Material).dispose();
-      }
+    [this.p1CursorMesh, this.p2CursorMesh].forEach((group) => {
+      group.traverse((obj) => {
+        if ((obj as THREE.Mesh).isMesh) {
+          const m = obj as THREE.Mesh;
+          m.geometry.dispose();
+          (m.material as THREE.Material).dispose();
+        }
+      });
     });
   }
 }

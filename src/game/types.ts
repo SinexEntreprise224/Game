@@ -105,3 +105,60 @@ export interface GameConfig {
   difficulty: AIDifficulty;
   roundsToWin: number;
 }
+
+// --- Gamepad & Controller Configuration Types ---
+
+export type GamepadAction = 'draw' | 'guard' | 'dodge' | 'cancel' | 'pause';
+
+export type StickChoice = 'left' | 'right';
+
+export interface GamepadBindings {
+  draw: number; // Default 7 (RT) - A (0) also supported as alt if desired
+  drawAlt: number; // Default 0 (A)
+  guard: number; // Default 6 (LT)
+  guardAlt: number; // Default 2 (X)
+  dodge: number; // Default 5 (RB)
+  dodgeAlt: number; // Default 1 (B)
+  cancel: number; // Default 3 (Y)
+  pause: number; // Default 9 (Menu/Start)
+  stick: StickChoice;
+  sensitivity: number; // 0.6 .. 1.8
+  vibration: boolean;
+}
+
+export type InputSourceSelection =
+  | { type: 'auto' }
+  | { type: 'keyboard_mouse' }
+  | { type: 'gamepad'; index: number };
+
+export interface ControllerSettings {
+  assignmentMode: 'auto' | 'manual';
+  p1ManualSource: InputSourceSelection;
+  p2ManualSource: InputSourceSelection;
+  p1Bindings: GamepadBindings;
+  p2Bindings: GamepadBindings;
+}
+
+export interface ConnectedGamepadInfo {
+  index: number;
+  id: string;
+  shortName: string;
+  mapping: string;
+  buttonCount: number;
+  axesCount: number;
+  hasActivity: boolean;
+  lastPressedButton: number | null;
+}
+
+export interface ResolvedPlayerInput {
+  p1GamepadIndex: number | null;
+  p2GamepadIndex: number | null;
+  p1UsesKeyboardMouse: boolean;
+  p2UsesKeyboard: boolean;
+}
+
+export interface GamepadSnapshot {
+  connected: ConnectedGamepadInfo[];
+  settings: ControllerSettings;
+  resolved: ResolvedPlayerInput;
+}

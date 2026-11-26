@@ -1,12 +1,15 @@
 import React from 'react';
-import { Pause, Play, RotateCcw, Home, Volume2, VolumeX } from 'lucide-react';
-import { FighterHUDState, MatchHUDState } from '../game/types';
+import { Pause, Play, RotateCcw, Home, Volume2, VolumeX, Gamepad2 } from 'lucide-react';
+import { formatGamepadButton } from '../game/gamepad';
+import { FighterHUDState, GamepadSnapshot, MatchHUDState } from '../game/types';
 
 interface CombatHUDProps {
   hud: MatchHUDState;
   muted: boolean;
+  gamepadSnapshot: GamepadSnapshot;
   onTogglePause: () => void;
   onToggleMute: () => void;
+  onOpenControllerSettings: () => void;
   onRestart: () => void;
   onReturnMenu: () => void;
 }
@@ -108,8 +111,10 @@ const FighterStatusPanel: React.FC<{
 export const CombatHUD: React.FC<CombatHUDProps> = ({
   hud,
   muted,
+  gamepadSnapshot,
   onTogglePause,
   onToggleMute,
+  onOpenControllerSettings,
   onRestart,
   onReturnMenu,
 }) => {
@@ -117,6 +122,10 @@ export const CombatHUD: React.FC<CombatHUDProps> = ({
     hud.mode === 'ai'
       ? `Solo · IA ${DIFFICULTY_LABELS[hud.difficulty]}`
       : '2 Joueurs Local';
+
+  const { resolved, settings } = gamepadSnapshot;
+  const p1HasPad = resolved.p1GamepadIndex !== null;
+  const p2HasPad = resolved.p2GamepadIndex !== null;
 
   return (
     <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-4 sm:p-5">
@@ -186,14 +195,31 @@ export const CombatHUD: React.FC<CombatHUDProps> = ({
       {/* Bottom Compact Controls Bar */}
       <div className="flex items-center justify-between gap-4">
         <div className="bg-[#0b0f18]/88 border border-slate-800/80 rounded-lg px-3.5 py-2 text-xs text-slate-300 flex flex-wrap items-center gap-x-4 gap-y-1">
-          <span>
-            <strong className="text-cyan-400">J1 :</strong> Glisser clic gauche (tracer) · Espace (garde) · E (esquive)
-          </span>
-          {hud.mode === 'local2p' && (
+          {p1HasPad ? (
             <span>
-              <strong className="text-orange-400">J2 :</strong> Flèches/IJKL (viseur) · Entrée/M (tracer) · Maj D (garde) · . (esquive)
+              <strong className="text-cyan-400">J1 (Manette) :</strong> Stick (tracer) · {formatGamepadButton(settings.p1Bindings.draw)}
+              {settings.p1Bindings.drawAlt >= 0 ? `/${formatGamepadButton(settings.p1Bindings.drawAlt)}` : ''} (lancer) · {formatGamepadButton(settings.p1Bindings.guard)}
+              {settings.p1Bindings.guardAlt >= 0 ? `/${formatGamepadButton(settings.p1Bindings.guardAlt)}` : ''} (garde) · {formatGamepadButton(settings.p1Bindings.dodge)}
+              {settings.p1Bindings.dodgeAlt >= 0 ? `/${formatGamepadButton(settings.p1Bindings.dodgeAlt)}` : ''} (esquive)
+            </span>
+          ) : (
+            <span>
+              <strong className="text-cyan-400">J1 :</strong> Glisser clic gauche (tracer) · Espace (garde) · E (esquive)
             </span>
           )}
+          {hud.mode === 'local2p' &&
+            (p2HasPad ? (
+              <span>
+                <strong className="text-orange-400">J2 (Manette) :</strong> Stick (tracer) · {formatGamepadButton(settings.p2Bindings.draw)}
+                {settings.p2Bindings.drawAlt >= 0 ? `/${formatGamepadButton(settings.p2Bindings.drawAlt)}` : ''} (lancer) · {formatGamepadButton(settings.p2Bindings.guard)}
+                {settings.p2Bindings.guardAlt >= 0 ? `/${formatGamepadButton(settings.p2Bindings.guardAlt)}` : ''} (garde) · {formatGamepadButton(settings.p2Bindings.dodge)}
+                {settings.p2Bindings.dodgeAlt >= 0 ? `/${formatGamepadButton(settings.p2Bindings.dodgeAlt)}` : ''} (esquive)
+              </span>
+            ) : (
+              <span>
+                <strong className="text-orange-400">J2 :</strong> Flèches/IJKL (viseur) · Entrée/M (tracer) · Maj D (garde) · . (esquive)
+              </span>
+            ))}
         </div>
 
         <div className="pointer-events-auto flex items-center gap-2 shrink-0">
@@ -239,6 +265,14 @@ export const CombatHUD: React.FC<CombatHUDProps> = ({
               >
                 <Play className="w-4 h-4" />
                 <span>Reprendre</span>
+              </button>
+              <button
+                type="button"
+                onClick={onOpenControllerSettings}
+                className="w-full flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold text-slate-100 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors cursor-pointer"
+              >
+                <Gamepad2 className="w-4 h-4 text-cyan-400" />
+                <span>Configurer les manettes</span>
               </button>
               <button
                 type="button"

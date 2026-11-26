@@ -36,6 +36,7 @@ import {
   ZONE_DAMAGE_MULTIPLIER,
 } from './constants';
 import { FighterCommandTarget } from './fighterInterface';
+import { GamepadManager } from './gamepad';
 import { detectSoftwareWebGL } from './materials';
 import {
   createFighterRig,
@@ -644,6 +645,7 @@ export class CombatEngine {
 
   private readonly p1: FighterActor;
   private readonly p2: FighterActor;
+  public readonly gamepadManager: GamepadManager;
   private readonly playerController: PlayerInputController;
   private readonly aiController: AIController;
 
@@ -676,10 +678,12 @@ export class CombatEngine {
 
   constructor(
     container: HTMLElement,
+    gamepadManager: GamepadManager,
     onHUDUpdate: (state: MatchHUDState) => void,
     onContextLost?: () => void
   ) {
     this.container = container;
+    this.gamepadManager = gamepadManager;
     this.onHUDUpdate = onHUDUpdate;
     this.onContextLostCallback = onContextLost;
     this.isSoftwareGl = detectSoftwareWebGL();
@@ -724,8 +728,11 @@ export class CombatEngine {
       this.renderer.domElement,
       this.combatCamera.camera,
       this.p1,
-      this.p2
+      this.p2,
+      this.gamepadManager,
+      () => this.togglePause()
     );
+    this.scene.add(this.playerController.p1CursorMesh);
     this.scene.add(this.playerController.p2CursorMesh);
 
     this.aiController = new AIController(this.p2, this.p1);
@@ -772,7 +779,7 @@ export class CombatEngine {
     this.bannerSubtext = 'Tracez la trajectoire de votre arme !';
     this.bannerTimer = 1.6;
 
-    this.playerController.setMode(this.config.mode === 'local2p', true);
+    this.playerController.setMode(this.config.mode === 'local2p', true, true);
     soundEngine.playRoundGong(false);
     this.emitHUD();
   }
@@ -780,11 +787,11 @@ export class CombatEngine {
   public togglePause(): void {
     if (this.screen === 'playing') {
       this.screen = 'paused';
-      this.playerController.setMode(this.config.mode === 'local2p', false);
+      this.playerController.setMode(this.config.mode === 'local2p', false, true);
       this.emitHUD();
     } else if (this.screen === 'paused') {
       this.screen = 'playing';
-      this.playerController.setMode(this.config.mode === 'local2p', true);
+      this.playerController.setMode(this.config.mode === 'local2p', true, true);
       this.emitHUD();
     }
   }
@@ -793,7 +800,7 @@ export class CombatEngine {
     this.screen = 'menu';
     this.bannerText = null;
     this.bannerSubtext = null;
-    this.playerController.setMode(false, false);
+    this.playerController.setMode(false, false, false);
     this.p1.resetForRound(false);
     this.p2.resetForRound(false);
     this.callouts.length = 0;
@@ -862,6 +869,8 @@ export class CombatEngine {
     this.elapsedTime += dt;
 
     if (this.screen === 'menu') {
+      // Keep gamepads auto-detected on menu entry
+      this.gamepadManager.pollFrames();
       // Idle animated showcase in menu background
       this.p1.update(this.p2, this.elapsedTime, dt);
       this.p2.update(this.p1, this.elapsedTime, dt);
@@ -879,6 +888,7 @@ export class CombatEngine {
     }
 
     if (this.screen === 'paused') {
+      this.playerController.pollPauseOnly();
       return;
     }
 
@@ -970,6 +980,8 @@ export class CombatEngine {
         this.impacts.spawnImpact(clashPt, 0xfef08a, 24, 1.3);
         this.combatCamera.addShake(0.45);
         soundEngine.playClash();
+        this.gamepadManager.rumble(1, 0.55, 0.7, 160);
+        this.gamepadManager.rumble(2, 0.55, 0.7, 160);
         this.spawnCallout('CHOC D’ARMES !', 'Déviation mutuelle', '#fef08a', clashPt);
         return;
       }
@@ -1021,6 +1033,8 @@ export class CombatEngine {
       this.impacts.spawnImpact(point, 0xfacc15, 22, 1.25);
       this.combatCamera.addShake(0.42);
       soundEngine.playParry();
+      this.gamepadManager.rumble(defender.id, 0.65, 0.85, 180);
+      this.gamepadManager.rumble(attacker.id, 0.4, 0.5, 130);
       this.spawnCallout('PARADE !', 'Arme repoussée', '#facc15', point);
       return;
     }
@@ -1029,6 +1043,7 @@ export class CombatEngine {
       this.impacts.spawnImpact(point, 0x94a3b8, 12, 0.85);
       this.combatCamera.addShake(0.2);
       soundEngine.playHit(false, true);
+      this.gamepadManager.rumble(defender.id, 0.35, 0.25, 110);
       this.spawnCallout(`BLOQUÉ -${res.applied}`, this.translateZone(zone), '#cbd5e1', point);
       return;
     }
@@ -1037,6 +1052,8 @@ export class CombatEngine {
     this.impacts.spawnImpact(point, attacker.accentHex, isCrit ? 24 : 16, isCrit ? 1.3 : 1.0);
     this.combatCamera.addShake(isCrit ? 0.55 : 0.32);
     soundEngine.playHit(isCrit, false);
+    this.gamepadManager.rumble(defender.id, isCrit ? 0.9 : 0.55, isCrit ? 0.8 : 0.4, isCrit ? 240 : 150);
+    this.gamepadManager.rumble(attacker.id, isCrit ? 0.45 : 0.25, 0.35, 110);
 
     this.spawnCallout(
       `-${res.applied}`,

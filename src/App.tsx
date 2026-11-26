@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { CombatHUD } from './components/CombatHUD';
+import { ControllerSettingsModal } from './components/ControllerSettingsModal';
 import { MainMenu } from './components/MainMenu';
 import { soundEngine } from './game/audio';
 import { CombatEngine } from './game/combatEngine';
-import { GameConfig, MatchHUDState } from './game/types';
+import { GamepadManager } from './game/gamepad';
+import { GameConfig, GamepadSnapshot, MatchHUDState } from './game/types';
 
 export default function App() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<CombatEngine | null>(null);
+  const gamepadManagerRef = useRef<GamepadManager | null>(null);
 
   const [config, setConfig] = useState<GameConfig>({
     mode: 'ai',
@@ -15,6 +18,8 @@ export default function App() {
     roundsToWin: 2,
   });
   const [hud, setHud] = useState<MatchHUDState | null>(null);
+  const [gamepadSnapshot, setGamepadSnapshot] = useState<GamepadSnapshot | null>(null);
+  const [controllerModalOpen, setControllerModalOpen] = useState(false);
   const [muted, setMuted] = useState(false);
   const [contextLost, setContextLost] = useState(false);
 
@@ -22,16 +27,24 @@ export default function App() {
     const mountEl = canvasMountRef.current;
     if (!mountEl) return;
 
+    const gamepadManager = new GamepadManager();
+    gamepadManagerRef.current = gamepadManager;
+    const unsubscribe = gamepadManager.subscribe((snap) => setGamepadSnapshot(snap));
+
     const engine = new CombatEngine(
       mountEl,
+      gamepadManager,
       (nextHud) => setHud(nextHud),
       () => setContextLost(true)
     );
     engineRef.current = engine;
 
     return () => {
+      unsubscribe();
       engine.dispose();
+      gamepadManager.dispose();
       engineRef.current = null;
+      gamepadManagerRef.current = null;
     };
   }, []);
 
@@ -82,24 +95,36 @@ export default function App() {
         </div>
       )}
 
-      {hud && hud.screen === 'menu' && (
+      {hud && hud.screen === 'menu' && gamepadSnapshot && (
         <MainMenu
           config={config}
           muted={muted}
+          gamepadSnapshot={gamepadSnapshot}
           onChangeConfig={setConfig}
           onToggleMute={handleToggleMute}
+          onOpenControllerSettings={() => setControllerModalOpen(true)}
           onStartMatch={handleStartMatch}
         />
       )}
 
-      {hud && hud.screen !== 'menu' && (
+      {hud && hud.screen !== 'menu' && gamepadSnapshot && (
         <CombatHUD
           hud={hud}
           muted={muted}
+          gamepadSnapshot={gamepadSnapshot}
           onTogglePause={handleTogglePause}
           onToggleMute={handleToggleMute}
+          onOpenControllerSettings={() => setControllerModalOpen(true)}
           onRestart={handleRestart}
           onReturnMenu={handleReturnMenu}
+        />
+      )}
+
+      {controllerModalOpen && gamepadManagerRef.current && gamepadSnapshot && (
+        <ControllerSettingsModal
+          gamepadManager={gamepadManagerRef.current}
+          snapshot={gamepadSnapshot}
+          onClose={() => setControllerModalOpen(false)}
         />
       )}
     </main>
