@@ -1,0 +1,6 @@
+{
+  "name": "CHAIN TRACE",
+  "description": "Jeu de combat 3D à arme à chaînes où le joueur dessine la trajectoire de son arme avant que son combattant ne suive le mouvement.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
